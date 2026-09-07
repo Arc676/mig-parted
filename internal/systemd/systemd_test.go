@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coreos/go-systemd/v22/dbus"
 )
 
 func setBusAddress(t *testing.T, socketPath string) {
@@ -40,6 +42,19 @@ func shortSocketPath(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return filepath.Join(dir, "s")
+}
+
+func expectTimeout(t *testing.T, mgr *Manager, err error) {
+	if err == nil {
+		_ = mgr.Close()
+		t.Fatal("expected an error connecting to an unresponsive D-Bus socket, got nil")
+	}
+	if mgr != nil {
+		t.Errorf("expected a nil manager on error, got %v", mgr)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("expected a timeout error, got: %v", err)
+	}
 }
 
 func TestNewManagerWithTimeoutUnresponsiveSocket(t *testing.T) {
@@ -68,19 +83,11 @@ func TestNewManagerWithTimeoutUnresponsiveSocket(t *testing.T) {
 
 	const timeout = 300 * time.Millisecond
 	start := time.Now()
-	mgr, err := newManagerWithTimeout(context.Background(), timeout)
+	mgr, err := newManagerWithTimeout(context.Background(), timeout, nil)
 	elapsed := time.Since(start)
 
-	if err == nil {
-		_ = mgr.Close()
-		t.Fatal("expected an error connecting to an unresponsive D-Bus socket, got nil")
-	}
-	if mgr != nil {
-		t.Errorf("expected a nil manager on error, got %v", mgr)
-	}
-	if !strings.Contains(err.Error(), "timed out") {
-		t.Errorf("expected a timeout error, got: %v", err)
-	}
+	expectTimeout(t, mgr, err)
+
 	// The call must return promptly after the timeout, not hang. A generous
 	// upper bound still catches a regression back to the indefinite block.
 	if elapsed > 5*time.Second {
@@ -93,7 +100,7 @@ func TestNewManagerWithTimeoutMissingSocket(t *testing.T) {
 
 	const timeout = 10 * time.Second
 	start := time.Now()
-	mgr, err := newManagerWithTimeout(context.Background(), timeout)
+	mgr, err := newManagerWithTimeout(context.Background(), timeout, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -115,5 +122,35 @@ func TestManagerCloseNil(t *testing.T) {
 	var mgr Manager
 	if err := mgr.Close(); err != nil {
 		t.Errorf("Close on a zero-value Manager returned an error: %v", err)
+	}
+}
+
+func TestManagerRace(t *testing.T) {
+	const timeout = 1 * time.Second
+
+	var conn *dbus.Conn
+
+	delayedConnect := func(ctx context.Context, ch chan result) {
+		// Intercept the connection so we can check its state afterwards
+		intercept := make(chan result, 1)
+		defaultConnect(ctx, intercept)
+		res := <-intercept
+		conn = res.conn
+
+		// Only send result after context is canceled to simulate race condition
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.Canceled {
+				ch <- res
+			}
+		}
+	}
+
+	mgr, err := newManagerWithTimeout(context.Background(), timeout, delayedConnect)
+
+	expectTimeout(t, mgr, err)
+
+	if conn.Connected() {
+		t.Errorf("expected connection to be dropped after timeout")
 	}
 }

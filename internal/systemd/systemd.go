@@ -39,22 +39,30 @@ type Manager struct {
 	cancel context.CancelFunc
 }
 
-func NewManager(ctx context.Context) (*Manager, error) {
-	return newManagerWithTimeout(ctx, systemdConnectTimeout)
+type result struct {
+	conn *dbus.Conn
+	err  error
 }
 
-func newManagerWithTimeout(ctx context.Context, timeout time.Duration) (*Manager, error) {
-	connCtx, cancel := context.WithCancel(ctx)
+// NewManager creates a new Manager instance with a timeout on the systemd connection
+func NewManager(ctx context.Context) (*Manager, error) {
+	return newManagerWithTimeout(ctx, systemdConnectTimeout, nil)
+}
 
-	type result struct {
-		conn *dbus.Conn
-		err  error
-	}
+func defaultConnect(connCtx context.Context, ch chan result) {
+	conn, err := dbus.NewSystemConnectionContext(connCtx)
+	ch <- result{conn: conn, err: err}
+}
+
+func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect func(context.Context, chan result)) (*Manager, error) {
+	connCtx, cancel := context.WithCancel(ctx)
 	ch := make(chan result, 1)
-	go func() {
-		conn, err := dbus.NewSystemConnectionContext(connCtx)
-		ch <- result{conn: conn, err: err}
-	}()
+
+	if connect == nil {
+		connect = defaultConnect
+	}
+
+	go connect(connCtx, ch)
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -72,6 +80,12 @@ func newManagerWithTimeout(ctx context.Context, timeout time.Duration) (*Manager
 		}, nil
 	case <-timer.C:
 		cancel()
+		select {
+		case res := <-ch:
+			if res.conn != nil {
+				res.conn.Close()
+			}
+		}
 		return nil, fmt.Errorf("timed out after %s connecting to systemd D-Bus: the system bus socket exists but is not responding (is this a systemd-less host?)", timeout)
 	}
 }
