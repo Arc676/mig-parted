@@ -80,12 +80,14 @@ func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect f
 		}, nil
 	case <-timer.C:
 		cancel()
-		select {
-		case res := <-ch:
+
+		go func() {
+			res := <-ch
 			if res.conn != nil {
 				res.conn.Close()
 			}
-		}
+		}()
+
 		return nil, fmt.Errorf("timed out after %s connecting to systemd D-Bus: the system bus socket exists but is not responding (is this a systemd-less host?)", timeout)
 	}
 }
