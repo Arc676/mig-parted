@@ -130,20 +130,18 @@ func TestManagerRace(t *testing.T) {
 
 	var conn *dbus.Conn
 
-	delayedConnect := func(ctx context.Context, ch chan result) {
+	delayedConnect := func(ctx context.Context) (*dbus.Conn, error) {
+		var err error
+
 		// Intercept the connection so we can check its state afterwards
-		intercept := make(chan result, 1)
-		defaultConnect(ctx, intercept)
-		res := <-intercept
-		conn = res.conn
+		conn, err = dbus.NewSystemConnectionContext(ctx)
 
 		// Only send result after context is canceled to simulate race condition
 		select {
 		case <-ctx.Done():
-			if ctx.Err() == context.Canceled {
-				ch <- res
-			}
 		}
+
+		return conn, err
 	}
 
 	mgr, err := newManagerWithTimeout(context.Background(), timeout, delayedConnect)

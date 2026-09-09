@@ -49,20 +49,28 @@ func NewManager(ctx context.Context) (*Manager, error) {
 	return newManagerWithTimeout(ctx, systemdConnectTimeout, nil)
 }
 
-func defaultConnect(connCtx context.Context, ch chan result) {
-	conn, err := dbus.NewSystemConnectionContext(connCtx)
-	ch <- result{conn: conn, err: err}
-}
-
-func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect func(context.Context, chan result)) (*Manager, error) {
+func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect func(context.Context) (*dbus.Conn, error)) (*Manager, error) {
 	connCtx, cancel := context.WithCancel(ctx)
 	ch := make(chan result, 1)
 
 	if connect == nil {
-		connect = defaultConnect
+		connect = dbus.NewSystemConnectionContext
 	}
 
-	go connect(connCtx, ch)
+	go func() {
+		// Block until connected or canceled
+		conn, err := connect(connCtx)
+		res := result{conn: conn, err: err}
+		select {
+		case ch <- res:
+			// Connected within time limit
+		case <-connCtx.Done():
+			// Drain connection if obtained after timeout
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}()
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -80,14 +88,6 @@ func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect f
 		}, nil
 	case <-timer.C:
 		cancel()
-
-		go func() {
-			res := <-ch
-			if res.conn != nil {
-				res.conn.Close()
-			}
-		}()
-
 		return nil, fmt.Errorf("timed out after %s connecting to systemd D-Bus: the system bus socket exists but is not responding (is this a systemd-less host?)", timeout)
 	}
 }
