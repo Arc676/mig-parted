@@ -137,9 +137,7 @@ func TestManagerRace(t *testing.T) {
 		conn, err = dbus.NewSystemConnectionContext(ctx)
 
 		// Only send result after context is canceled to simulate race condition
-		select {
-		case <-ctx.Done():
-		}
+		<-ctx.Done()
 
 		return conn, err
 	}
@@ -150,5 +148,24 @@ func TestManagerRace(t *testing.T) {
 
 	if conn.Connected() {
 		t.Errorf("expected connection to be dropped after timeout")
+	}
+}
+
+func TestCancelDbus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	conn, err := dbus.NewSystemConnectionContext(ctx)
+	if err != nil {
+		t.Errorf("expected successful connection, got error: %v", err)
+	}
+
+	if !conn.Connected() {
+		t.Error("connection is not connected")
+	}
+
+	cancel()
+
+	if conn.Connected() {
+		t.Error("canceling connection context did not disconnect dbus")
 	}
 }

@@ -65,7 +65,7 @@ func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect f
 		case ch <- res:
 			// Connected within time limit
 		case <-connCtx.Done():
-			// Drain connection if obtained after timeout
+			// Explicitly drain connection if obtained after timeout
 			if conn != nil {
 				conn.Close()
 			}
@@ -87,6 +87,7 @@ func newManagerWithTimeout(ctx context.Context, timeout time.Duration, connect f
 			cancel: cancel,
 		}, nil
 	case <-timer.C:
+		// Canceling the connection context both disconnects a late result and aborts an ongoing connection attempt
 		cancel()
 		return nil, fmt.Errorf("timed out after %s connecting to systemd D-Bus: the system bus socket exists but is not responding (is this a systemd-less host?)", timeout)
 	}
